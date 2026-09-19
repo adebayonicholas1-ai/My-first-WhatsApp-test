@@ -1,0 +1,119 @@
+# ⚡ EnquiryIQ WhatsApp Automation
+
+AI-powered WhatsApp customer enquiry automation using Google Gemini + Twilio.
+
+## What it does
+
+1. Customer sends WhatsApp message
+2. Gemini AI analyses: category, priority, sentiment
+3. Auto-reply sent to customer instantly
+4. Staff alerted on WhatsApp
+5. All enquiries stored and tracked
+
+## Setup Guide
+
+### Step 1 — Get your Gemini API Key (FREE)
+1. Go to aistudio.google.com
+2. Click "Get API Key"
+3. Click "Create API Key"
+4. Copy the key
+
+### Step 2 — Get Twilio Test Number (FREE)
+1. Go to twilio.com and sign up free
+2. Go to Console → Messaging → Try it out → Send a WhatsApp message
+3. Follow instructions to join sandbox:
+   - Send "join [your-sandbox-word]" to +1 415 523 8886 on WhatsApp
+4. Note your Account SID and Auth Token from Console
+
+### Step 3 — Clone and configure
+```bash
+git clone https://github.com/yourusername/enquiryiq-whatsapp.git
+cd enquiryiq-whatsapp
+npm install
+cp .env.example .env
+```
+
+Edit .env with your values:
+```
+GEMINI_API_KEY=your_key_here
+TWILIO_ACCOUNT_SID=ACxxxxxxxx
+TWILIO_AUTH_TOKEN=your_token
+TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+TWILIO_WHATSAPP_TO=whatsapp:+234XXXXXXXXXX
+```
+
+### Step 4 — Test locally
+```bash
+node index.js
+```
+
+Test it:
+```bash
+curl -X POST http://localhost:3000/test \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Adaeze Okonkwo",
+    "message": "I ordered 3 items and have not received them. Order #1089",
+    "channel": "WhatsApp"
+  }'
+```
+
+### Step 5 — Deploy to Render
+1. Push code to GitHub
+2. Go to render.com → New Web Service
+3. Connect your GitHub repo
+4. Add environment variables
+5. Click Deploy
+6. Copy your Render URL
+
+### Step 6 — Connect Twilio Webhook
+1. Go to Twilio Console → Messaging → Try WhatsApp
+2. Set webhook URL to: https://your-render-url.onrender.com/webhook
+3. Method: POST
+4. Save
+
+### Step 7 — Test live
+Send a WhatsApp message to +1 415 523 8886
+You should receive:
+- Auto-reply from the system
+- Staff alert on your phone
+
+## API Endpoints
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | / | Health check |
+| POST | /webhook | Twilio webhook (auto) |
+| POST | /test | Manual test |
+| GET | /enquiries | View all enquiries |
+| GET | /dashboard | Stats summary |
+| PATCH | /enquiries/:id | Update status |
+
+## Test Scenarios
+
+### Scenario 1 — Normal Enquiry
+```json
+{
+  "name": "Chidi Obi",
+  "message": "What is the price for bulk order of 50 units?",
+  "channel": "Website"
+}
+```
+
+### Scenario 2 — Urgent Complaint
+```json
+{
+  "name": "Emeka Nwosu",
+  "message": "My product arrived damaged! I want a refund NOW. This is unacceptable!",
+  "channel": "WhatsApp"
+}
+```
+
+### Scenario 3 — Payment Issue
+```json
+{
+  "name": "Ngozi Adeleke",
+  "message": "I made payment yesterday but no confirmation received. Transaction ID: TXN123",
+  "channel": "Facebook"
+}
+```
