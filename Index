@@ -1,447 +1,170 @@
-// ============================================================
-//  EnquiryIQ — WhatsApp Test Automation
-//  Gemini AI + Twilio Test Number + Render Deploy
-// ============================================================
+import express from "express";
+import dotenv from "dotenv";
+import { GoogleGenAI } from "@google/genai";
 
-const express = require('express');
-const axios   = require('axios');
-require('dotenv').config();
+dotenv.config();
 
-const app  = express();
+const app = express();
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// ── ENV VARIABLES (set these in Render dashboard) ───────────
-const GEMINI_API_KEY   = process.env.GEMINI_API_KEY;
-const TWILIO_SID       = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_AUTH      = process.env.TWILIO_AUTH_TOKEN;
-const TWILIO_FROM      = process.env.TWILIO_WHATSAPP_FROM;  // whatsapp:+14155238886
-const TWILIO_TO        = process.env.TWILIO_WHATSAPP_TO;    // whatsapp:+234XXXXXXXXXX
-const PORT             = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
-// ── IN-MEMORY STORE (acts as our database for MVP) ──────────
-const enquiries = [];
+// Gemini
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY
+});
 
-// ============================================================
-//  GEMINI AI — Analyse customer message
-// ============================================================
-async function analyseWithGemini(customerName, channel, message) {
-  const prompt = `
-You are EnquiryIQ AI for an African business customer support system.
-Analyse this customer message and return ONLY a valid JSON object.
-No explanation. No markdown. No code blocks. Just raw JSON.
-
-Customer Name: ${customerName}
-Channel: ${channel}
-Message: ${message}
-
-Return exactly this format:
-{
-  "category": "Order Complaint or Pricing Inquiry or Product Inquiry or Payment Issue or Complaint or General or Positive Feedback",
-  "priority": "URGENT or HIGH or MEDIUM or LOW",
-  "sentiment": "Very Angry or Frustrated or Neutral or Happy or Very Happy",
-  "summary": "one sentence summary of what the customer wants",
-  "suggested_action": "what staff should do next in one sentence",
-  "response_tone": "Apologetic or Informative or Helpful or Celebratory"
-}`;
-
-  try {
-    const res = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        contents: [{ parts: [{ text: prompt }] }]
-      },
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    const raw = res.data.candidates[0].content.parts[0].text.trim();
-
-    // Clean any accidental markdown code fences
-    const cleaned = raw.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleaned);
-
-  } catch (err) {
-    console.error('Gemini analysis error:', err.message);
-    return {
-      category:         'General',
-      priority:         'MEDIUM',
-      sentiment:        'Neutral',
-      summary:          'Customer sent an enquiry',
-      suggested_action: 'Review and respond to customer',
-      response_tone:    'Helpful'
-    };
-  }
-}
-
-// ============================================================
-//  GEMINI AI — Generate auto-reply message
-// ============================================================
-async function generateReply(customerName, message, category, tone) {
-  const prompt = `
-You are a professional customer service AI for an African business called AfriShop.
-Write a warm, empathetic auto-reply message for this customer.
-
-Rules:
-- Maximum 80 words
-- Acknowledge their specific concern
-- Tell them a human will respond within 1 hour
-- Use warm, professional African business tone
-- Sign off as "AfriShop Customer Care Team"
-- Do NOT mention AI or automation
-- Do NOT use asterisks or markdown
-
-Customer name: ${customerName}
-Their message: ${message}
-Category: ${category}
-Tone needed: ${tone}
-
-Write ONLY the reply message. Nothing else.`;
-
-  try {
-    const res = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        contents: [{ parts: [{ text: prompt }] }]
-      },
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    return res.data.candidates[0].content.parts[0].text.trim();
-
-  } catch (err) {
-    console.error('Gemini reply error:', err.message);
-    return `Dear ${customerName}, thank you for contacting AfriShop. We have received your message and our team will respond within 1 hour. We appreciate your patience.\n\n— AfriShop Customer Care Team`;
-  }
-}
-
-// ============================================================
-//  GEMINI AI — Generate staff alert message
-// ============================================================
-async function generateStaffAlert(customerName, channel, analysis) {
-  const priorityEmoji = {
-    URGENT: '🔴',
-    HIGH:   '🟡',
-    MEDIUM: '🔵',
-    LOW:    '🟢'
-  };
-
-  const emoji = priorityEmoji[analysis.priority] || '🔵';
-
-  return `${emoji} *NEW ENQUIRY — EnquiryIQ*
-
-*Customer:* ${customerName}
-*Channel:* ${channel}
-*Priority:* ${analysis.priority}
-*Category:* ${analysis.category}
-*Sentiment:* ${analysis.sentiment}
-
-*Summary:* ${analysis.summary}
-
-*Suggested Action:* ${analysis.suggested_action}
-
-_Auto-reply has been sent to customer._
-_Please follow up within 1 hour._
-
-⏰ ${new Date().toLocaleString('en-NG', { timeZone: 'Africa/Lagos' })} (WAT)`;
-}
-
-// ============================================================
-//  TWILIO — Send WhatsApp message
-// ============================================================
-async function sendWhatsApp(to, message) {
-  if (!TWILIO_SID || !TWILIO_AUTH) {
-    console.log('📱 [SIMULATED WhatsApp to', to, ']:\n', message);
-    return { simulated: true };
-  }
-
-  try {
-    const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`;
-
-    const params = new URLSearchParams();
-    params.append('From', TWILIO_FROM);
-    params.append('To',   to);
-    params.append('Body', message);
-
-    const res = await axios.post(url, params, {
-      auth: { username: TWILIO_SID, password: TWILIO_AUTH },
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-    });
-
-    console.log('✅ WhatsApp sent to', to, '| SID:', res.data.sid);
-    return res.data;
-
-  } catch (err) {
-    console.error('❌ Twilio error:', err.response?.data || err.message);
-    throw err;
-  }
-}
-
-// ============================================================
-//  ROUTE 1 — Health check
-// ============================================================
-app.get('/', (req, res) => {
+// -------------------------
+// HEALTH CHECK
+// -------------------------
+app.get("/", (req, res) => {
   res.json({
-    app:     'EnquiryIQ WhatsApp Automation',
-    status:  'running',
-    version: '1.0.0',
-    time:    new Date().toISOString(),
-    enquiries_received: enquiries.length,
-    endpoints: {
-      health:         'GET /',
-      webhook:        'POST /webhook',
-      test:           'POST /test',
-      all_enquiries:  'GET /enquiries',
-      dashboard:      'GET /dashboard'
-    }
+    status: "online",
+    message: "WhatsApp Gemini Bot is running"
   });
 });
 
-// ============================================================
-//  ROUTE 2 — Twilio WhatsApp Webhook
-//  (Twilio sends POST here when customer messages you)
-// ============================================================
-app.post('/webhook', async (req, res) => {
-  console.log('\n📨 Incoming WhatsApp message received');
-  console.log('Body:', req.body);
+// -------------------------
+// WHATSAPP WEBHOOK VERIFY
+// -------------------------
+app.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
 
-  // Twilio sends these fields
-  const customerPhone = req.body.From || 'whatsapp:+2340000000000';
-  const message       = req.body.Body || '';
-  const customerName  = req.body.ProfileName || 'Customer';
-
-  if (!message) {
-    return res.status(200).send('<Response></Response>');
+  if (
+    mode === "subscribe" &&
+    token === process.env.WHATSAPP_VERIFY_TOKEN
+  ) {
+    console.log("Webhook verified!");
+    return res.status(200).send(challenge);
   }
 
-  console.log(`👤 From: ${customerName} (${customerPhone})`);
-  console.log(`💬 Message: ${message}`);
+  return res.sendStatus(403);
+});
 
+// -------------------------
+// WHATSAPP WEBHOOK
+// -------------------------
+app.post("/webhook", async (req, res) => {
   try {
-    // ── STEP 1: Analyse with Gemini ────────────────────────
-    console.log('\n🤖 Analysing with Gemini AI...');
-    const analysis = await analyseWithGemini(customerName, 'WhatsApp', message);
-    console.log('📊 Analysis:', analysis);
+    const body = req.body;
 
-    // ── STEP 2: Save enquiry ────────────────────────────────
-    const enquiry = {
-      id:           `ENQ${String(enquiries.length + 1).padStart(3, '0')}`,
-      customerName,
-      customerPhone,
-      channel:      'WhatsApp',
-      message,
-      analysis,
-      status:       'New',
-      autoReplySent: false,
-      createdAt:    new Date().toISOString()
-    };
-    enquiries.push(enquiry);
-    console.log(`💾 Saved as enquiry ${enquiry.id}`);
+    console.log("WhatsApp webhook received");
 
-    // ── STEP 3: Generate auto-reply ─────────────────────────
-    console.log('\n✍️ Generating auto-reply...');
-    const autoReply = await generateReply(
-      customerName,
-      message,
-      analysis.category,
-      analysis.response_tone
-    );
-    console.log('📝 Auto-reply ready');
-
-    // ── STEP 4: Send auto-reply to customer ─────────────────
-    await sendWhatsApp(customerPhone, autoReply);
-    enquiry.autoReplySent = true;
-    console.log('✅ Auto-reply sent to customer');
-
-    // ── STEP 5: Alert staff if URGENT or HIGH ──────────────
-    if (['URGENT', 'HIGH'].includes(analysis.priority)) {
-      console.log('\n🚨 Priority is', analysis.priority, '— alerting staff...');
-      const staffAlert = await generateStaffAlert(customerName, 'WhatsApp', analysis);
-      await sendWhatsApp(TWILIO_TO, staffAlert);
-      console.log('✅ Staff alert sent');
-    } else {
-      // Send normal notification to staff
-      const normalAlert = await generateStaffAlert(customerName, 'WhatsApp', analysis);
-      await sendWhatsApp(TWILIO_TO, normalAlert);
+    // Make sure this is a WhatsApp message
+    if (
+      body.object !== "whatsapp_business_account" ||
+      !body.entry
+    ) {
+      return res.sendStatus(200);
     }
 
-    // ── STEP 6: Respond to Twilio (empty = no double reply) ─
-    res.set('Content-Type', 'text/xml');
-    res.send('<Response></Response>');
+    for (const entry of body.entry) {
+      const changes = entry.changes || [];
 
-    console.log(`\n✅ Enquiry ${enquiry.id} processed successfully`);
+      for (const change of changes) {
+        const value = change.value;
 
-  } catch (err) {
-    console.error('\n❌ Webhook error:', err.message);
-    res.status(500).send('<Response></Response>');
+        if (!value.messages) {
+          continue;
+        }
+
+        for (const message of value.messages) {
+          // Only process text messages
+          if (message.type !== "text") {
+            continue;
+          }
+
+          const from = message.from;
+          const userMessage = message.text.body;
+
+          console.log(`Message from ${from}: ${userMessage}`);
+
+          // Ask Gemini
+          const geminiResponse = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: `
+You are a helpful customer support assistant.
+
+Keep your responses:
+- Friendly
+- Clear
+- Short
+- Useful
+- Professional
+
+Customer message:
+${userMessage}
+            `
+          });
+
+          const reply =
+            geminiResponse.text ||
+            "Sorry, I could not generate a response right now.";
+
+          // Send reply to WhatsApp
+          await sendWhatsAppMessage(from, reply);
+        }
+      }
+    }
+
+    res.sendStatus(200);
+
+  } catch (error) {
+    console.error("Webhook error:", error);
+    res.sendStatus(500);
   }
 });
 
-// ============================================================
-//  ROUTE 3 — Manual test endpoint
-//  POST /test  { "name": "...", "message": "..." }
-// ============================================================
-app.post('/test', async (req, res) => {
-  const {
-    name    = 'Test Customer',
-    phone   = 'whatsapp:+2348012345678',
-    message = 'I want to know the price of your product',
-    channel = 'WhatsApp'
-  } = req.body;
+// -------------------------
+// SEND WHATSAPP MESSAGE
+// -------------------------
+async function sendWhatsAppMessage(to, message) {
+  const url =
+    `https://graph.facebook.com/${process.env.META_API_VERSION}` +
+    `/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
-  console.log('\n🧪 MANUAL TEST triggered');
-  console.log(`👤 Name: ${name} | Channel: ${channel}`);
-  console.log(`💬 Message: ${message}`);
+  const response = await fetch(url, {
+    method: "POST",
 
-  try {
-    // Analyse
-    console.log('\n🤖 Running Gemini analysis...');
-    const analysis = await analyseWithGemini(name, channel, message);
+    headers: {
+      "Authorization":
+        `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
 
-    // Generate reply
-    const autoReply = await generateReply(
-      name, message, analysis.category, analysis.response_tone
-    );
-
-    // Generate staff alert
-    const staffAlert = await generateStaffAlert(name, channel, analysis);
-
-    // Save
-    const enquiry = {
-      id:        `ENQ${String(enquiries.length + 1).padStart(3, '0')}`,
-      customerName: name,
-      customerPhone: phone,
-      channel,
-      message,
-      analysis,
-      autoReply,
-      staffAlert,
-      status:    'New',
-      createdAt: new Date().toISOString()
-    };
-    enquiries.push(enquiry);
-
-    // Send WhatsApp messages
-    const results = {};
-
-    try {
-      await sendWhatsApp(phone, autoReply);
-      results.customerReply = 'sent';
-    } catch (e) {
-      results.customerReply = 'simulated (no Twilio)';
-    }
-
-    try {
-      await sendWhatsApp(TWILIO_TO, staffAlert);
-      results.staffAlert = 'sent';
-    } catch (e) {
-      results.staffAlert = 'simulated (no Twilio)';
-    }
-
-    res.json({
-      success:   true,
-      enquiry_id: enquiry.id,
-      analysis,
-      autoReply,
-      staffAlert,
-      whatsapp:  results,
-      message:   '✅ Test completed successfully'
-    });
-
-    console.log('\n✅ Test completed:', enquiry.id);
-
-  } catch (err) {
-    console.error('❌ Test error:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ============================================================
-//  ROUTE 4 — View all enquiries
-// ============================================================
-app.get('/enquiries', (req, res) => {
-  res.json({
-    total:     enquiries.length,
-    urgent:    enquiries.filter(e => e.analysis?.priority === 'URGENT').length,
-    new:       enquiries.filter(e => e.status === 'New').length,
-    enquiries: enquiries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-  });
-});
-
-// ============================================================
-//  ROUTE 5 — Dashboard summary
-// ============================================================
-app.get('/dashboard', (req, res) => {
-  const total    = enquiries.length;
-  const urgent   = enquiries.filter(e => e.analysis?.priority === 'URGENT').length;
-  const high     = enquiries.filter(e => e.analysis?.priority === 'HIGH').length;
-  const resolved = enquiries.filter(e => e.status === 'Resolved').length;
-
-  const categories = {};
-  const channels   = {};
-  const sentiments = {};
-
-  enquiries.forEach(e => {
-    if (e.analysis) {
-      categories[e.analysis.category] = (categories[e.analysis.category] || 0) + 1;
-      sentiments[e.analysis.sentiment] = (sentiments[e.analysis.sentiment] || 0) + 1;
-    }
-    channels[e.channel] = (channels[e.channel] || 0) + 1;
-  });
-
-  res.json({
-    summary: {
-      total_enquiries:   total,
-      urgent_cases:      urgent,
-      high_priority:     high,
-      resolved:          resolved,
-      pending:           total - resolved,
-      auto_replies_sent: enquiries.filter(e => e.autoReplySent).length
+      "Content-Type": "application/json"
     },
-    breakdown: { categories, channels, sentiments },
-    latest_5:  enquiries.slice(-5).reverse().map(e => ({
-      id:       e.id,
-      customer: e.customerName,
-      channel:  e.channel,
-      priority: e.analysis?.priority,
-      category: e.analysis?.category,
-      status:   e.status,
-      time:     e.createdAt
-    }))
+
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+
+      recipient_type: "individual",
+
+      to: to,
+
+      type: "text",
+
+      text: {
+        preview_url: false,
+        body: message
+      }
+    })
   });
-});
 
-// ============================================================
-//  ROUTE 6 — Update enquiry status
-// ============================================================
-app.patch('/enquiries/:id', (req, res) => {
-  const { id }     = req.params;
-  const { status } = req.body;
-  const enquiry    = enquiries.find(e => e.id === id);
+  const data = await response.json();
 
-  if (!enquiry) {
-    return res.status(404).json({ error: 'Enquiry not found' });
+  if (!response.ok) {
+    console.error("WhatsApp API error:", data);
+  } else {
+    console.log("WhatsApp reply sent!");
   }
 
-  enquiry.status    = status;
-  enquiry.updatedAt = new Date().toISOString();
+  return data;
+}
 
-  res.json({ success: true, enquiry });
-});
-
-// ============================================================
-//  START SERVER
-// ============================================================
-app.listen(PORT, () => {
-  console.log(`
-╔════════════════════════════════════════╗
-║     EnquiryIQ WhatsApp Automation      ║
-║     Running on port ${PORT}               ║
-╠════════════════════════════════════════╣
-║  GET  /           → Health check       ║
-║  POST /webhook    → Twilio webhook     ║
-║  POST /test       → Manual test        ║
-║  GET  /enquiries  → View all           ║
-║  GET  /dashboard  → Summary stats      ║
-╚════════════════════════════════════════╝
-  `);
+// -------------------------
+// START SERVER
+// -------------------------
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on port ${PORT}`);
 });
