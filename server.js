@@ -9,7 +9,26 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// Gemini
+// -------------------------
+// CHECK ENVIRONMENT VARIABLES
+// -------------------------
+const requiredEnv = [
+  "GEMINI_API_KEY",
+  "WHATSAPP_VERIFY_TOKEN",
+  "WHATSAPP_ACCESS_TOKEN",
+  "WHATSAPP_PHONE_NUMBER_ID",
+  "META_API_VERSION"
+];
+
+for (const variable of requiredEnv) {
+  if (!process.env[variable]) {
+    console.error(`Missing environment variable: ${variable}`);
+  }
+}
+
+// -------------------------
+// GEMINI
+// -------------------------
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY
 });
@@ -40,6 +59,7 @@ app.get("/webhook", (req, res) => {
     return res.status(200).send(challenge);
   }
 
+  console.log("Webhook verification failed.");
   return res.sendStatus(403);
 });
 
@@ -50,9 +70,11 @@ app.post("/webhook", async (req, res) => {
   try {
     const body = req.body;
 
-    console.log("WhatsApp webhook received");
+    console.log(
+      "WhatsApp webhook received:",
+      JSON.stringify(body, null, 2)
+    );
 
-    // Make sure this is a WhatsApp message
     if (
       body.object !== "whatsapp_business_account" ||
       !body.entry
@@ -66,54 +88,66 @@ app.post("/webhook", async (req, res) => {
       for (const change of changes) {
         const value = change.value;
 
-        if (!value.messages) {
+        if (!value?.messages) {
           continue;
         }
 
         for (const message of value.messages) {
-          // Only process text messages
+
+          // Only handle text messages
           if (message.type !== "text") {
             continue;
           }
 
           const from = message.from;
-          const userMessage = message.text.body;
+          const userMessage = message.text?.body;
+
+          if (!userMessage) {
+            continue;
+          }
 
           console.log(`Message from ${from}: ${userMessage}`);
 
-          // Ask Gemini
-          const geminiResponse = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: `
+          // -------------------------
+          // ASK GEMINI
+          // -------------------------
+          const geminiResponse =
+            await ai.models.generateContent({
+              model: "gemini-2.5-flash",
+              contents: `
 You are a helpful customer support assistant.
 
-Keep your responses:
-- Friendly
-- Clear
-- Short
-- Useful
-- Professional
+Rules:
+- Be friendly.
+- Be clear.
+- Keep responses short.
+- Give useful answers.
+- Be professional.
 
 Customer message:
 ${userMessage}
-            `
-          });
+              `
+            });
 
           const reply =
             geminiResponse.text ||
             "Sorry, I could not generate a response right now.";
 
-          // Send reply to WhatsApp
+          console.log(`Gemini reply: ${reply}`);
+
+          // -------------------------
+          // SEND TO WHATSAPP
+          // -------------------------
           await sendWhatsAppMessage(from, reply);
         }
       }
     }
 
-    res.sendStatus(200);
+    return res.sendStatus(200);
 
   } catch (error) {
     console.error("Webhook error:", error);
-    res.sendStatus(500);
+    return res.sendStatus(500);
   }
 });
 
@@ -121,15 +155,20 @@ ${userMessage}
 // SEND WHATSAPP MESSAGE
 // -------------------------
 async function sendWhatsAppMessage(to, message) {
+
   const url =
     `https://graph.facebook.com/${process.env.META_API_VERSION}` +
     `/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  console.log("Sending WhatsApp message...");
+  console.log("To:", to);
+  console.log("Phone Number ID:", process.env.WHATSAPP_PHONE_NUMBER_ID);
 
   const response = await fetch(url, {
     method: "POST",
 
     headers: {
-      "Authorization":
+      Authorization:
         `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
 
       "Content-Type": "application/json"
@@ -137,13 +176,9 @@ async function sendWhatsAppMessage(to, message) {
 
     body: JSON.stringify({
       messaging_product: "whatsapp",
-
       recipient_type: "individual",
-
       to: to,
-
       type: "text",
-
       text: {
         preview_url: false,
         body: message
@@ -153,14 +188,17 @@ async function sendWhatsAppMessage(to, message) {
 
   const data = await response.json();
 
+  console.log("WhatsApp API response:", data);
+
   if (!response.ok) {
-    console.error("WhatsApp API error:", data);
-  } else {
-    console.log("WhatsApp reply sent!");
+    throw new Error(
+      `WhatsApp API error: ${JSON.stringify(data)}`
+    );
   }
 
   return data;
 }
+
 // -------------------------
 // TEST GEMINI WITHOUT WHATSAPP
 // -------------------------
@@ -177,22 +215,23 @@ app.post("/test", async (req, res) => {
 
     console.log(`Test message: ${message}`);
 
-    const geminiResponse = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: `
+    const geminiResponse =
+      await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `
 You are a helpful customer support assistant.
 
-Keep your responses:
-- Friendly
-- Clear
-- Short
-- Useful
-- Professional
+Rules:
+- Be friendly.
+- Be clear.
+- Keep responses short.
+- Give useful answers.
+- Be professional.
 
 Customer message:
 ${message}
-      `
-    });
+        `
+      });
 
     const reply =
       geminiResponse.text ||
@@ -213,6 +252,7 @@ ${message}
     });
   }
 });
+
 // -------------------------
 // START SERVER
 // -------------------------
